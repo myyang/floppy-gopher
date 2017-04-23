@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -10,9 +9,9 @@ import (
 )
 
 type scene struct {
-	time  int
 	bg    *sdl.Texture
-	birds []*sdl.Texture
+	bird  *bird
+	pipes *pipes
 }
 
 func newScene(r *sdl.Renderer) (*scene, error) {
@@ -20,27 +19,38 @@ func newScene(r *sdl.Renderer) (*scene, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Error to load background. Error: %v", err)
 	}
-	var birds []*sdl.Texture
-	for i := 1; i < 5; i++ {
-		bird, err := img.LoadTexture(r, fmt.Sprintf("img/frame-%d.png", i))
-		if err != nil {
-			return nil, fmt.Errorf("Error to load bird. Error: %v", err)
-		}
-		birds = append(birds, bird)
+	bird, err := newBird(r)
+	if err != nil {
+		return nil, fmt.Errorf("Fail to create new bird. Error: %v", err)
+	}
+	pipes, err := newPipes(r)
+	if err != nil {
+		return nil, err
 	}
 
-	return &scene{bg: bg, birds: birds}, nil
+	return &scene{bg: bg, bird: bird, pipes: pipes}, nil
 }
 
-func (s *scene) run(ctx context.Context, r *sdl.Renderer) <-chan error {
+func (s *scene) run(events <-chan sdl.Event, r *sdl.Renderer) <-chan error {
 	errc := make(chan error)
 	go func() {
 		defer close(errc)
-		for range time.Tick(10 * time.Millisecond) {
+		tick := time.Tick(10 * time.Millisecond)
+		for {
 			select {
-			case <-ctx.Done():
-				return
-			default:
+			case event := <-events:
+				if done := s.handleEvent(event); done {
+					return
+				}
+			case <-tick:
+				s.update()
+
+				if s.bird.isDead() {
+					drawTitle(r, "Game Over")
+					time.Sleep(time.Second * 2)
+					s.restart()
+				}
+
 				if err := s.print(r); err != nil {
 					errc <- err
 				}
@@ -51,18 +61,43 @@ func (s *scene) run(ctx context.Context, r *sdl.Renderer) <-chan error {
 	return errc
 }
 
+func (s *scene) handleEvent(event sdl.Event) bool {
+	switch event.(type) {
+	case *sdl.QuitEvent:
+		return true
+	case *sdl.MouseButtonEvent:
+		s.bird.jump()
+	default:
+		//log.Printf("Event %+v", event)
+	}
+	return false
+}
+
+func (s *scene) update() {
+	s.bird.update()
+	s.pipes.update()
+	s.pipes.touch(s.bird)
+}
+
+func (s *scene) restart() {
+	s.bird.restart()
+	s.pipes.restart()
+}
+
 func (s *scene) print(r *sdl.Renderer) error {
-	s.time++
 	r.Clear()
 
 	if err := r.Copy(s.bg, nil, nil); err != nil {
 		return fmt.Errorf("Could not copy background to render. Error: %v", err)
 	}
 
-	birdRect := &sdl.Rect{X: 50, Y: 300 - 43/2, W: 50, H: 43}
-	if err := r.Copy(s.birds[s.time/10%len(s.birds)], nil, birdRect); err != nil {
-		return fmt.Errorf("Could not copy bird to render. Error: %v", err)
+	if err := s.bird.paint(r); err != nil {
+		return err
 	}
+	if err := s.pipes.paint(r); err != nil {
+		return err
+	}
+
 	r.Present()
 
 	return nil
@@ -70,4 +105,6 @@ func (s *scene) print(r *sdl.Renderer) error {
 
 func (s *scene) destroy() {
 	s.bg.Destroy()
+	s.bird.destory()
+	s.pipes.destory()
 }
